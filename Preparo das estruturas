@@ -1,0 +1,110 @@
+# PREPARO DOS RECEPTORES
+
+pdbfixer XP-273-model_02.pdb \
+  --output=XP273-clean.pdb \
+  --add-atoms=all \
+  --replace-nonstandard \
+  --keep-heterogens=none \
+  --ph=7.4
+
+## adiciona todos os átomos faltantes
+## corrige resíduos não padrão
+## remove heteroátomos
+
+# PREPARO DO GORE4
+
+# -*- coding: utf-8 -*-
+from pdbfixer import PDBFixer
+from openmm.app import PDBFile
+
+# Mapa de hidrogenios polares por tipo de residuo (ligados a N, O ou S)
+POLAR_H_BY_RES = {
+    'ALA': {'H', 'HN', 'H1', 'H2', 'H3'},
+    'VAL': {'H', 'HN', 'H1', 'H2', 'H3'},
+    'LEU': {'H', 'HN', 'H1', 'H2', 'H3'},
+    'ILE': {'H', 'HN', 'H1', 'H2', 'H3'},
+    'PRO': set(),
+    'PHE': {'H', 'HN', 'H1', 'H2', 'H3'},
+    'MET': {'H', 'HN', 'H1', 'H2', 'H3'},
+    'GLY': {'H', 'HN', 'H1', 'H2', 'H3'},
+    'LYS': {'H', 'HN', 'H1', 'H2', 'H3', 'HZ1', 'HZ2', 'HZ3'},
+    'ARG': {'H', 'HN', 'H1', 'H2', 'H3', 'HE', 'HH11', 'HH12', 'HH21', 'HH22'},
+    'HIS': {'H', 'HN', 'H1', 'H2', 'H3', 'HD1', 'HE2'},
+    'HIE': {'H', 'HN', 'H1', 'H2', 'H3', 'HE2'},
+    'HID': {'H', 'HN', 'H1', 'H2', 'H3', 'HD1'},
+    'HIP': {'H', 'HN', 'H1', 'H2', 'H3', 'HD1', 'HE2'},
+    'TYR': {'H', 'HN', 'H1', 'H2', 'H3', 'HH'},
+    'SER': {'H', 'HN', 'H1', 'H2', 'H3', 'HG'},
+    'THR': {'H', 'HN', 'H1', 'H2', 'H3', 'HG1'},
+    'CYS': {'H', 'HN', 'H1', 'H2', 'H3', 'HG'},
+    'ASN': {'H', 'HN', 'H1', 'H2', 'H3', 'HD21', 'HD22'},
+    'GLN': {'H', 'HN', 'H1', 'H2', 'H3', 'HE21', 'HE22'},
+    'TRP': {'H', 'HN', 'H1', 'H2', 'H3', 'HE1'},
+    'ASP': {'H', 'HN', 'H1', 'H2', 'H3'},
+    'GLU': {'H', 'HN', 'H1', 'H2', 'H3'},
+}
+
+# ── Etapa 1: adiciona atomos faltantes e hidrogenios (all-atom) ──────────────
+fixer = PDBFixer(filename='GORE4.pdb')
+fixer.findMissingResidues()
+fixer.findNonstandardResidues()
+fixer.replaceNonstandardResidues()
+fixer.findMissingAtoms()
+fixer.addMissingAtoms()
+fixer.addMissingHydrogens(pH=7.4)  # NZ da Lys protonado, terminais corretos
+
+with open('GORE4_H.pdb', 'w') as f:
+    PDBFile.writeFile(fixer.topology, fixer.positions, f)
+
+# ── Etapa 2: remove hidrogenios apolares (ligados a carbono) ─────────────────
+with open('GORE4_H.pdb') as f:
+    lines = f.readlines()
+
+out = []
+removidos = 0
+for line in lines:
+    rec = line[:6].strip()
+    if rec in ('MODEL', 'ENDMDL', 'REMARK', 'HEADER'):
+        continue
+    if rec in ('ATOM', 'HETATM'):
+        atom_name = line[12:16].strip()
+        res_name  = line[17:20].strip()
+        elem      = line[76:78].strip()
+        is_H = (elem == 'H') or (not elem and atom_name.startswith('H'))
+        if is_H:
+            allowed = POLAR_H_BY_RES.get(res_name, {'H', 'HN', 'H1', 'H2', 'H3'})
+            if atom_name not in allowed:
+                removidos += 1
+                continue
+    out.append(line)
+
+# ── Etapa 3: renumera serialmente e salva ────────────────────────────────────
+final = []
+serial = 1
+for line in out:
+    rec = line[:6].strip()
+    if rec in ('ATOM', 'HETATM'):
+        line = f"{line[:6]}{serial:5d}{line[11:]}"
+        serial += 1
+    elif rec == 'TER':
+        line = f"TER   {serial:5d}{line[11:]}"
+        serial += 1
+    final.append(line)
+
+if not final[-1].startswith('END'):
+    final.append('END\n')
+
+with open('GORE4_ready.pdb', 'w') as f:
+    f.writelines(final)
+
+# ── Relatorio ────────────────────────────────────────────────────────────────
+heavy  = sum(1 for l in final if l[:6].strip() in ('ATOM', 'HETATM')
+             and not l[12:16].strip().startswith('H'))
+polar  = sum(1 for l in final if l[:6].strip() in ('ATOM', 'HETATM')
+             and l[12:16].strip().startswith('H'))
+
+print(f"Hidrogenios apolares removidos : {removidos}")
+print(f"Atomos pesados                 : {heavy}")
+print(f"Hidrogenios polares mantidos   : {polar}")
+print(f"Total de atomos                : {heavy + polar}")
+print("Arquivo salvo: GORE4_ready.pdb")
